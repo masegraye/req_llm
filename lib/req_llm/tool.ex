@@ -76,7 +76,8 @@ defmodule ReqLLM.Tool do
     field(:description, String.t(), enforce: true)
     field(:parameter_schema, keyword() | map(), default: [])
     field(:compiled, term() | nil, default: nil)
-    field(:callback, callback(), enforce: true)
+    field(:callback, callback() | nil, default: nil)  # Optional for passthrough tools
+    field(:passthrough?, boolean(), default: false)  # Indicates tool is passthrough
     field(:strict, boolean(), default: false)
   end
 
@@ -106,8 +107,13 @@ defmodule ReqLLM.Tool do
                  ],
                  callback: [
                    type: :any,
-                   required: true,
-                   doc: "Callback function or MFA tuple"
+                   required: false,  # Optional for passthrough tools
+                   doc: "Callback function or MFA tuple (optional for passthrough tools)"
+                 ],
+                 passthrough: [
+                   type: :boolean,
+                   default: false,
+                   doc: "If true, tool is passthrough (no local execution)"
                  ],
                  strict: [
                    type: :boolean,
@@ -160,7 +166,8 @@ defmodule ReqLLM.Tool do
   @spec new(tool_opts()) :: {:ok, t()} | {:error, term()}
   def new(opts) when is_list(opts) do
     with {:ok, validated_opts} <- NimbleOptions.validate(opts, @tool_schema),
-         :ok <- validate_name(validated_opts[:name]),
+         # Skip strict validation for passthrough tools (they're just forwarded)
+         :ok <- validate_name(validated_opts[:name], validated_opts[:passthrough] || false),
          :ok <- validate_parameter_schema(validated_opts[:parameter_schema]),
          :ok <- validate_callback(validated_opts[:callback]),
          {:ok, compiled_schema} <- compile_parameter_schema(validated_opts[:parameter_schema]) do
@@ -170,6 +177,7 @@ defmodule ReqLLM.Tool do
         parameter_schema: validated_opts[:parameter_schema],
         compiled: compiled_schema,
         callback: validated_opts[:callback],
+        passthrough?: validated_opts[:passthrough] || false,
         strict: validated_opts[:strict] || false
       }
 
@@ -239,6 +247,15 @@ defmodule ReqLLM.Tool do
 
   """
   @spec execute(t(), map()) :: {:ok, term()} | {:error, term()}
+  # Passthrough tools return :passthrough error (caller handles execution)
+  def execute(%__MODULE__{passthrough?: true}, _input) do
+    {:error, :passthrough}
+  end
+
+  def execute(%__MODULE__{callback: nil}, _input) do
+    {:error, :passthrough}
+  end
+
   def execute(%__MODULE__{} = tool, input) when is_map(input) do
     with {:ok, validated_input} <- validate_input(tool, input) do
       call_callback(tool.callback, validated_input)
@@ -335,7 +352,17 @@ defmodule ReqLLM.Tool do
 
   # Private functions
 
-  defp validate_name(name) do
+  # Passthrough tools: minimal validation (just length check)
+  defp validate_name(name, true = _passthrough) when is_binary(name) do
+    if String.length(name) <= 64 do
+      :ok
+    else
+      {:error, "Tool name too long: #{inspect(name)}. Max 64 chars"}
+    end
+  end
+
+  # Regular tools: strict validation (alphanumeric + underscore)
+  defp validate_name(name, false = _passthrough) do
     if valid_name?(name) do
       :ok
     else
@@ -350,6 +377,9 @@ defmodule ReqLLM.Tool do
     {:error,
      "Invalid parameter_schema: #{inspect(schema)}. Must be a keyword list (NimbleOptions) or map (JSON Schema)"}
   end
+
+  # Allow nil callback for passthrough tools
+  defp validate_callback(nil), do: :ok
 
   defp validate_callback({module, function}) when is_atom(module) and is_atom(function) do
     if function_exported?(module, function, 1) do

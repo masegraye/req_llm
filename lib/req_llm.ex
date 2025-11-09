@@ -625,6 +625,55 @@ defmodule ReqLLM do
   end
 
   @doc """
+  Creates a passthrough tool for transparent proxy mode.
+
+  Passthrough tools are sent to the LLM but not executed locally.
+  The LLM's tool_calls are returned in the response for the caller to handle.
+
+  ## Parameters
+
+    * `opts` - Tool definition options (keyword list)
+
+  ## Options
+
+    * `:name` - Tool name (required)
+    * `:description` - Tool description (required)
+    * `:parameter_schema` - Parameter schema as keyword list or map (optional)
+
+  ## Examples
+
+      # Create passthrough tool
+      tool = ReqLLM.tool_passthrough(
+        name: "List",
+        description: "List files in directory",
+        parameter_schema: [
+          path: [type: :string, required: true]
+        ]
+      )
+
+      # Use in generation
+      {:ok, response} = ReqLLM.generate_text(model, messages, tools: [tool])
+
+      # Tool calls returned for caller to handle
+      case response.finish_reason do
+        :tool_calls ->
+          Enum.each(response.tool_calls, fn call ->
+            # Caller executes tool externally
+          end)
+      end
+
+  """
+  @spec tool_passthrough(keyword()) :: Tool.t()
+  def tool_passthrough(opts) when is_list(opts) do
+    opts_with_passthrough =
+      opts
+      |> Keyword.put(:passthrough, true)
+      |> Keyword.delete(:callback)  # Ensure no callback
+
+    Tool.new!(opts_with_passthrough)
+  end
+
+  @doc """
   Creates a JSON schema object compatible with ReqLLM.
 
   Equivalent to Vercel AI SDK's `jsonSchema()` helper, this function

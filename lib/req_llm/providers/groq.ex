@@ -173,20 +173,33 @@ defmodule ReqLLM.Providers.Groq do
         true -> {nil, nil}
       end
 
-    type = tool_choice && (Map.get(tool_choice, :type) || Map.get(tool_choice, "type"))
-    name = tool_choice && (Map.get(tool_choice, :name) || Map.get(tool_choice, "name"))
+    # Handle both string ("auto", "required") and map formats
+    cond do
+      is_binary(tool_choice) ->
+        # String format (e.g., "auto", "required") - pass through as-is
+        body
 
-    if type == "tool" && name do
-      replacement =
-        if is_map_key(tool_choice, :type) do
-          %{type: "function", function: %{name: name}}
+      is_map(tool_choice) ->
+        # Map format - may need translation
+        type = Map.get(tool_choice, :type) || Map.get(tool_choice, "type")
+        name = Map.get(tool_choice, :name) || Map.get(tool_choice, "name")
+
+        if type == "tool" && name do
+          replacement =
+            if is_map_key(tool_choice, :type) do
+              %{type: "function", function: %{name: name}}
+            else
+              %{"type" => "function", "function" => %{"name" => name}}
+            end
+
+          Map.put(body, body_key, replacement)
         else
-          %{"type" => "function", "function" => %{"name" => name}}
+          body
         end
 
-      Map.put(body, body_key, replacement)
-    else
-      body
+      true ->
+        # nil or other - leave body unchanged
+        body
     end
   end
 
